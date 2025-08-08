@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Rain Drop Rush — Balajj Gopinath</title>
+<style>
+  :root{
+    --bg-morning: linear-gradient(180deg,#c6e9ff,#dff7ff);
+    --bg-afternoon: linear-gradient(180deg,#a3d4ff,#eaf7ff);
+    --bg-night: linear-gradient(180deg,#0f1a2b,#2b4162);
+    --accent: #2f9e4a;
+    --muted: #6b7a86;
+    --ui-bg: rgba(255,255,255,0.85);
+  }
+  html,body{height:100%;margin:0;background:#9ecffb;font-family:Inter,Segoe UI,Roboto,system-ui,-apple-system,Arial;}
+  #game-wrap{position:relative;height:100vh;width:100vw;overflow:hidden;display:flex;align-items:center;justify-content:center}
+  canvas{display:block;max-width:100%;height:100vh}
+  .overlay-ui{
+    position:absolute;left:0;right:0;top:0;pointer-events:none;padding:12px;display:flex;justify-content:space-between;align-items:flex-start;
+  }
+  .left-ui{display:flex;flex-direction:column;gap:8px;align-items:flex-start;pointer-events:auto;}
+  .top-left{
+    background:var(--ui-bg);border-radius:10px;padding:6px 10px;display:flex;gap:8px;align-items:center;backdrop-filter: blur(4px);
+  }
+  .brand{font-weight:700;color:var(--accent);font-size:13px}
+  .thirst-bar{width:120px;height:12px;background:#eee;border-radius:8px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.05)}
+  .thirst-fill{height:100%;background:linear-gradient(90deg,#59c173,#2f9e4a);width:100%}
+  .top-center{pointer-events:none; font-weight:700;background:var(--ui-bg);border-radius:10px;padding:8px 14px;font-size:16px;}
+  .right-ui{pointer-events:auto;margin-right:8px;}
+  .small-btn{background:var(--ui-bg);padding:6px 8px;border-radius:8px;font-weight:600;border:none}
+  .bottom-hint{position:absolute;left:0;right:0;bottom:12px;text-align:center;pointer-events:none;color:#fff;font-weight:600;text-shadow:0 2px 6px rgba(0,0,0,0.3)}
+  .hint-pill{display:inline-block;background:rgba(0,0,0,0.35);padding:8px 12px;border-radius:20px}
+  @media (min-width:900px){
+    .top-center{font-size:18px}
+    .brand{font-size:14px}
+  }
+</style>
+</head>
+<body>
+<div id="game-wrap">
+  <canvas id="game"></canvas>
+
+  <div class="overlay-ui">
+    <div class="left-ui">
+      <div class="top-left">
+        <div>
+          <div class="brand">Game by Balajj Gopinath</div>
+          <div style="font-size:11px;color:var(--muted)">Rain Drop Rush</div>
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;margin-left:8px;">
+          <div style="font-size:11px;color:var(--muted);">Thirst</div>
+          <div class="thirst-bar" id="thirstBar"><div class="thirst-fill" id="thirstFill"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:12px;">
+      <div class="top-center" id="scoreDisplay">Score: 0</div>
+    </div>
+
+    <div class="right-ui" style="display:flex;flex-direction:column;gap:8px;">
+      <button id="pauseBtn" class="small-btn" title="Pause">Pause</button>
+      <button id="restartBtn" class="small-btn" title="Restart">Restart</button>
+    </div>
+  </div>
+
+  <div class="bottom-hint"><span class="hint-pill">Swipe / Drag on the bottom to move the pot</span></div>
+</div>
+
+<script>
+/*
+  Rain Drop Rush - Single File
+  - Movement and falling based on pixels-per-second (speed in px/s)
+  - requestAnimationFrame with delta time used throughout
+  - Touch drag on bottom 30% for pot movement
+  - WebAudio sounds (no external assets)
+*/
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: false });
+let DPR = Math.max(1, window.devicePixelRatio || 1);
+
+function resize(){
+  DPR = Math.max(1, window.devicePixelRatio || 1);
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  canvas.width = Math.floor(w * DPR);
+  canvas.height = Math.floor(h * DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0); // work in CSS pixels
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ---------- Utilities ---------- */
+function rand(min,max){ return Math.random()*(max-min)+min; }
+function choose(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+/* ---------- Audio (WebAudio simple effects) ---------- */
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+function playSplash(){
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(700, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(200, audioCtx.currentTime + 0.12);
+  g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.15, audioCtx.currentTime + 0.01);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.25);
+}
+function playRustle(){
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(300, audioCtx.currentTime);
+  o.frequency.linearRampToValueAtTime(100, audioCtx.currentTime + 0.35);
+  g.gain.setValueAtTime(0.001, audioCtx.currentTime);
+  g.gain.linearRampToValueAtTime(0.08, audioCtx.currentTime+0.02);
+  g.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime+0.45);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + 0.5);
+}
+function playDroop(){
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(220, audioCtx.currentTime);
+  o.frequency.exponentialRampToValueAtTime(80, audioCtx.currentTime + 0.7);
+  g.gain.setValueAtTime(0.001, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.14, audioCtx.currentTime+0.02);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.9);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime+1);
+}
+
+/* ---------- Game State ---------- */
+const state = {
+  lastTime: null,
+  paused: false,
+  width: canvas.width / DPR,
+  height: canvas.height / DPR,
+  score: 0,
+  thirst: 100,
+  spawnTimer: 0,
+  spawnInterval: 0.9, // seconds (will decrease)
+  difficultyTimer: 0,
+  windTimer: 0,
+  wind: { active:false, vx:0, remaining:0 },
+  drops: [], // raindrops + bugs + powerups (type field)
+  pot: { x: 0, y: 0, w: 120, h: 40, vx: 0, speed: 800 }, // speed in px/s for pot when moving by swipe
+  growth: { stage: 0, progress: 0, lastGrowAnim:0 },
+  effects: [], // ephemeral particles
+  timeSinceStart: 0,
+  nutrientActive: false,
+  fertilizerActive: false,
+  nutrientTimer: 0,
+  fertilizerTimer: 0,
+};
+
+/* Growth thresholds */
+const GROWTH_THRESH = [0, 20, 60, 150]; // score thresholds for stages
+const STAGE_NAMES = ['Seedling','Baby Monstera','Full Monstera','Bloom Mode'];
+
+/* UI Elements */
+const scoreDisplay = document.getElementById('scoreDisplay');
+const thirstFill = document.getElementById('thirstFill');
+const pauseBtn = document.getElementById('pauseBtn');
+const restartBtn = document.getElementById('restartBtn');
+
+pauseBtn.addEventListener('click', ()=>{ state.paused = !state.paused; pauseBtn.textContent = state.paused ? 'Resume' : 'Pause'; state.lastTime = null; });
+restartBtn.addEventListener('click', ()=>{ restart(); });
+
+function restart(){
+  state.score = 0; state.thirst = 100; state.drops = []; state.effects = [];
+  state.spawnInterval = 0.9; state.difficultyTimer = 0; state.timeSinceStart = 0;
+  state.growth.stage = 0; state.growth.progress = 0; state.growth.lastGrowAnim = 0;
+  state.nutrientActive = false; state.fertilizerActive = false; state.nutrientTimer = 0; state.fertilizerTimer = 0;
+  state.paused = false; pauseBtn.textContent = 'Pause';
+}
+
+/* ---------- Input (touch drag / swipe on bottom 30%) ---------- */
+let activeTouchId = null;
+let touchOffsetX = 0;
+const bottomSensitiveRatio = 0.36;
+
+function getCanvasRect(){ return canvas.getBoundingClientRect(); }
+
+function pointerDown(x,y,id){
+  const rect = getCanvasRect();
+  const relY = (y - rect.top);
+  const threshold = rect.height * (1 - bottomSensitiveRatio);
+  if (relY >= threshold){ // allow control only in bottom region
+    activeTouchId = id;
+    const rectCanvas = rect;
+    const cssX = x - rectCanvas.left;
+    touchOffsetX = cssX - state.pot.x;
+  }
+}
+function pointerMove(x,y,id){
+  if (activeTouchId !== id) return;
+  const rect = getCanvasRect();
+  const cssX = x - rect.left;
+  let desired = cssX - touchOffsetX;
+  // clamp
+  desired = Math.max(0, Math.min(rect.width - state.pot.w, desired));
+  state.pot.x = desired;
+}
+function pointerUp(x,y,id){
+  if (activeTouchId === id) activeTouchId = null;
+}
+
+canvas.addEventListener('touchstart', (e)=>{
+  const t = e.changedTouches[0];
+  pointerDown(t.clientX, t.clientY, t.identifier);
+});
+canvas.addEventListener('touchmove', (e)=>{
+  for (const t of e.changedTouches) pointerMove(t.clientX, t.clientY, t.identifier);
+  e.preventDefault();
+},{passive:false});
+canvas.addEventListener('touchend', (e)=>{ for (const t of e.changedTouches) pointerUp(t.clientX, t.clientY, t.identifier); });
+canvas.addEventListener('pointerdown', (e)=> pointerDown(e.clientX, e.clientY, e.pointerId));
+canvas.addEventListener('pointermove', (e)=> { if (e.pressure>0) pointerMove(e.clientX, e.clientY, e.pointerId); });
+canvas.addEventListener('pointerup', (e)=> pointerUp(e.clientX, e.clientY, e.pointerId));
+
+/* ---------- Entities ---------- */
+function spawnDrop(kind='rain'){
+  // kind: 'rain', 'bug', 'gold', 'nutrient', 'fertilizer'
+  const margin = 20;
+  const x = rand(margin, state.width - margin);
+  const baseSpeed = rand(220, 360); // px/s
+  const speed = baseSpeed + state.timeSinceStart * 2; // small scaling with time
+  const size = kind==='bug' ? rand(14,20) : kind==='gold' ? rand(10,16) : rand(6,12);
+  state.drops.push({
+    kind, x, y: -20, vy: speed, vx: 0, size,
+    wobble: Math.random()*Math.PI*2,
+    angle: 0
+  });
+}
+function spawnInitialWave(){
+  for(let i=0;i<6;i++) spawnDrop('rain');
+}
+spawnInitialWave();
+
+/* ---------- Game Logic ---------- */
+function applyWind(drop, dt){
+  if (!state.wind.active) return;
+  drop.vx = state.wind.vx * (drop.kind==='bug' ? 1.1 : 1.0);
+  drop.x += drop.vx * dt;
+}
+function updateDrops(dt){
+  const toRemove = [];
+  for(let i=0;i<state.drops.length;i++){
+    const d = state.drops[i];
+    // speed modifiers
+    let vy = d.vy;
+    if (state.nutrientActive) vy *= 0.65;
+    // update
+    d.y += vy * dt;
+    applyWind(d, dt);
+    d.wobble += dt*6;
+    d.angle = Math.sin(d.wobble)*0.25;
+
+    // collision with pot (simple rectangular catch)
+    if (d.y + d.size >= state.pot.y && d.y - d.size <= state.pot.y + state.pot.h){
+      if (d.x >= state.pot.x - d.size && d.x <= state.pot.x + state.pot.w + d.size){
+        // it's caught
+        handleCatch(d);
+        toRemove.push(i);
+        continue;
+      }
+    }
+    // off bottom
+    if (d.y - d.size > state.height + 40){
+      // missed if it's rain or golden or powerup; bugs that hit soil? treat as miss harmful
+      handleMiss(d);
+      toRemove.push(i);
+    }
+  }
+  // remove in reverse
+  for(let j=toRemove.length-1;j>=0;j--) state.drops.splice(toRemove[j],1);
+}
+
+function handleCatch(d){
+  if (d.kind === 'bug'){
+    // hitting a bug with pot is bad — maybe it crawls into soil and eats? reduce thirst more
+    state.thirst = Math.max(0, state.thirst - 12);
+    state.score = Math.max(0, state.score - 5);
+    playDroop();
+  } else if (d.kind === 'rain'){
+    state.score += 1 * (state.fertilizerActive ? 2 : 1);
+    state.thirst = Math.min(100, state.thirst + 4);
+    playSplash();
+    triggerGrow(1);
+    spawnSplashEffect(d.x, d.y, d.size, '#88d1ff');
+  } else if (d.kind === 'gold'){
+    state.score += 10;
+    state.thirst = Math.min(100, state.thirst + 10);
+    playSplash();
+    triggerGrow(4);
+    spawnSplashEffect(d.x, d.y, d.size, '#ffd36a');
+  } else if (d.kind === 'nutrient'){
+    state.nutrientActive = true; state.nutrientTimer = 5;
+    playRustle();
+    spawnSplashEffect(d.x, d.y, d.size, '#c2ffb3');
+  } else if (d.kind === 'fertilizer'){
+    state.fertilizerActive = true; state.fertilizerTimer = 10;
+    playRustle();
+    spawnSplashEffect(d.x, d.y, d.size, '#ffd0f0');
+  }
+}
+
+function handleMiss(d){
+  if (d.kind === 'bug'){
+    // a bug hitting the soil is bad — reduce thirst
+    state.thirst = Math.max(0, state.thirst - 10);
+    playDroop();
+    spawnSplashEffect(d.x, state.height - 20, d.size, '#8b5a4b');
+  } else {
+    // missed rain/powerups/gold: thirst decreases
+    state.thirst = Math.max(0, state.thirst - (d.kind==='gold' ? 6 : 5));
+    if (d.kind === 'rain') playDroop();
+  }
+}
+
+/* ---------- Effects ---------- */
+function spawnSplashEffect(x,y,size,color){
+  for(let i=0;i<8;i++){
+    state.effects.push({
+      x, y, vx: rand(-60,60), vy: rand(-200,-30), life: rand(0.3,0.9), size: rand(2,6), color
+    });
+  }
+}
+function updateEffects(dt){
+  for(let i=state.effects.length-1;i>=0;i--){
+    const e = state.effects[i];
+    e.life -= dt;
+    e.x += e.vx * dt; e.y += e.vy * dt;
+    if (e.life <= 0) state.effects.splice(i,1);
+  }
+}
+
+/* ---------- Growth ---------- */
+function triggerGrow(amount){
+  state.growth.progress += amount;
+  // small leaf animation trigger
+  state.growth.lastGrowAnim = 0.4;
+}
+function updateGrowth(){
+  // compute stage from score
+  let st = 0;
+  for (let i=GROWTH_THRESH.length-1;i>=0;i--){
+    if (state.score >= GROWTH_THRESH[i]){ st = i; break; }
+  }
+  state.growth.stage = st;
+}
+
+/* ---------- Spawn & Difficulty ---------- */
+function updateSpawning(dt){
+  state.spawnTimer -= dt;
+  if (state.spawnTimer <= 0){
+    // decide what to spawn
+    const r = Math.random();
+    // adjust probabilities over time
+    let bugChance = Math.min(0.18, 0.02 + state.timeSinceStart*0.002);
+    let goldChance = 0.03;
+    let nutrientChance = 0.04;
+    let fertilizerChance = 0.03;
+    if (r < goldChance) spawnDrop('gold');
+    else if (r < goldChance + nutrientChance) spawnDrop('nutrient');
+    else if (r < goldChance + nutrientChance + fertilizerChance) spawnDrop('fertilizer');
+    else if (r < goldChance + nutrientChance + fertilizerChance + bugChance) spawnDrop('bug');
+    else spawnDrop('rain');
+
+    // next spawn interval shortens over time (difficulty)
+    state.spawnInterval = Math.max(0.28, 0.9 - Math.min(0.7, state.timeSinceStart * 0.02));
+    // but if nutrient active, spawn slightly slower
+    if (state.nutrientActive) state.spawnTimer = state.spawnInterval * 1.25;
+    else state.spawnTimer = state.spawnInterval;
+  }
+
+  // difficulty increases slowly: maybe reduce spawnInterval over time handled above via timeSinceStart
+  state.difficultyTimer += dt;
+  // wind occasional
+  state.windTimer -= dt;
+  if (state.windTimer <= 0){
+    if (Math.random() < 0.28){
+      state.wind.active = true;
+      const dir = Math.random() < 0.5 ? -1 : 1;
+      state.wind.vx = dir * rand(40, 150);
+      state.wind.remaining = rand(2.2, 5.0);
+    } else { state.wind.active = false; state.wind.vx = 0; state.wind.remaining = 0; }
+    state.windTimer = rand(6, 13);
+  }
+  if (state.wind.active){
+    state.wind.remaining -= dt;
+    if (state.wind.remaining <= 0){ state.wind.active = false; state.wind.vx = 0; }
+  }
+
+}
+
+/* ---------- Update ---------- */
+function update(dt){
+  if (state.paused) return;
+  state.timeSinceStart += dt;
+
+  // update pot placeholder position if not controlled
+  // pot x is controlled by touch; if not touching, apply tiny drift for feel
+  // (no auto movement)
+
+  // update drops
+  updateDrops(dt);
+  updateEffects(dt);
+  updateSpawning(dt);
+  updateGrowth();
+
+  // power-up timers
+  if (state.nutrientActive){
+    state.nutrientTimer -= dt;
+    if (state.nutrientTimer <= 0) state.nutrientActive = false;
+  }
+  if (state.fertilizerActive){
+    state.fertilizerTimer -= dt;
+    if (state.fertilizerTimer <= 0) state.fertilizerActive = false;
+  }
+
+  // thirst natural drain
+  state.thirst = Math.max(0, state.thirst - dt*0.6);
+  // if extremely thirsty, lose score slowly
+  if (state.thirst < 8) state.score = Math.max(0, state.score - Math.floor(dt*2));
+
+  // growth animation timer
+  if (state.growth.lastGrowAnim > 0) state.growth.lastGrowAnim -= dt;
+
+  // check game over (thirst 0 => wilt)
+  // We'll not stop the game, but show wilt visuals. Optionally can restart.
+}
+
+/* ---------- Rendering ---------- */
+function drawBackground(){
+  // change background by time of day (using timeSinceStart modulo for demo)
+  const t = (new Date()).getHours(); // real device hour for natural feel
+  let grad;
+  if (t >= 18 || t < 5){
+    grad = ctx.createLinearGradient(0,0,state.width, state.height);
+    grad.addColorStop(0,'#0b1a2b'); grad.addColorStop(1,'#2a3f60');
+  } else if (t >= 12){
+    grad = ctx.createLinearGradient(0,0,state.width, state.height);
+    grad.addColorStop(0,'#9fd1ff'); grad.addColorStop(1,'#dff7ff');
+  } else {
+    grad = ctx.createLinearGradient(0,0,state.width, state.height);
+    grad.addColorStop(0,'#c6e9ff'); grad.addColorStop(1,'#e9fbff');
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0,0,state.width,state.height);
+
+  // subtle moving clouds (parallax)
+  const now = performance.now() * 0.00007;
+  ctx.globalAlpha = 0.55;
+  for(let i=0;i<5;i++){
+    const cx = (now*30 + i*170) % (state.width + 200) - 100;
+    const cy = 60 + (i%3)*30;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 60 + (i%2?20:0), 26, 0, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawPlant(){
+  // simple cartoon Monstera plant drawn on pot
+  const baseX = state.pot.x + state.pot.w/2;
+  const baseY = state.pot.y - 6;
+  // pot shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.12)';
+  ctx.beginPath();
+  ctx.ellipse(baseX, state.pot.y + state.pot.h + 6, state.pot.w*0.55, 10, 0, 0, Math.PI*2);
+  ctx.fill();
+
+  // pot
+  ctx.fillStyle = '#7b4f3a';
+  roundRect(ctx, state.pot.x, state.pot.y, state.pot.w, state.pot.h, 8, true, false);
+  ctx.fillStyle = '#9a6a48';
+  roundRect(ctx, state.pot.x+10, state.pot.y+4, state.pot.w-20, 8, 6, true, false);
+
+  // plant leaves depending on stage
+  ctx.save();
+  ctx.translate(baseX, baseY);
+  // small bob if growing
+  const bob = state.growth.lastGrowAnim > 0 ? Math.sin((state.growth.lastGrowAnim*20)) * 6 : 0;
+  ctx.translate(0, -10 - bob);
+  const stage = state.growth.stage;
+  // draw stems
+  ctx.strokeStyle = '#2f7b42'; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(-4, 0); ctx.quadraticCurveTo(-30, -40, -18, -90); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.quadraticCurveTo(10, -30, 48, -78); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(8, -6); ctx.quadraticCurveTo(40, -26, 68, -56); ctx.stroke();
+
+  // leaf function
+  function leaf(x,y,scale,holes=3,tilt=0){
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(tilt);
+    ctx.scale(scale, scale);
+    ctx.beginPath();
+    ctx.moveTo(0,0);
+    ctx.bezierCurveTo(40,-10,70,-60,60,-110);
+    ctx.bezierCurveTo(20,-120,-10,-80,-20,-50);
+    ctx.bezierCurveTo(-30,-30,-10,10,0,0);
+    ctx.closePath();
+    ctx.fillStyle = '#2f9e4a';
+    ctx.fill();
+    // holes (Monstera slits)
+    ctx.fillStyle = '#1e6b33';
+    for(let i=0;i<holes;i++){
+      ctx.beginPath();
+      ctx.ellipse(10 - i*8, -20 - i*18, 6, 10, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // stage-based leaves
+  if (stage >= 0){
+    leaf(-8, -30, 0.55, 1, -0.25);
+  }
+  if (stage >= 1){
+    leaf(18, -40, 0.68, 1, 0.18);
+    leaf(-28, -60, 0.6, 1, -0.45);
+  }
+  if (stage >= 2){
+    leaf(40, -10, 0.96, 3, 0.12);
+    leaf(8, -90, 0.9, 3, -0.1);
+  }
+  if (stage >= 3){
+    // bloom effect sparkle
+    ctx.globalCompositeOperation = 'lighter';
+    for(let i=0;i<6;i++){
+      ctx.beginPath();
+      const ax = Math.cos(i/6*Math.PI*2 + state.timeSinceStart*2) * 18;
+      const ay = Math.sin(i/6*Math.PI*2 + state.timeSinceStart*2) * 6 - 80;
+      ctx.fillStyle = 'rgba(255, 244, 170, 0.9)';
+      ctx.ellipse(ax, ay, 4, 8, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  ctx.restore();
+}
+
+/* ---------- Draw drops ---------- */
+function drawDrop(d){
+  ctx.save();
+  // raindrop style
+  if (d.kind === 'rain'){
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.angle);
+    // glossy drop
+    const grad = ctx.createRadialGradient(-d.size*0.3, -d.size*0.6, 1, 0, 0, d.size);
+    grad.addColorStop(0, 'rgba(255,255,255,0.9)');
+    grad.addColorStop(0.3, 'rgba(160,220,255,0.95)');
+    grad.addColorStop(1, 'rgba(90,170,230,0.7)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(0, -d.size*1.6);
+    ctx.quadraticCurveTo(d.size, -d.size*0.2, 0, d.size*1.2);
+    ctx.quadraticCurveTo(-d.size, -d.size*0.2, 0, -d.size*1.6);
+    ctx.fill();
+    // highlight
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath(); ctx.ellipse(-d.size*0.35, -d.size*0.6, d.size*0.28, d.size*0.5, 0, 0, Math.PI*2); ctx.fill();
+  } else if (d.kind === 'bug'){
+    // bug - small beetle
+    ctx.translate(d.x, d.y);
+    ctx.rotate(d.angle);
+    ctx.beginPath();
+    ctx.fillStyle = '#2b2b2b';
+    ctx.ellipse(0, 0, d.size*0.8, d.size*0.6, 0, 0, Math.PI*2);
+    ctx.fill();
+    // wings split
+    ctx.fillStyle = '#4a2b2b';
+    ctx.beginPath(); ctx.ellipse(-d.size*0.2, 0, d.size*0.45, d.size*0.55, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse( d.size*0.2, 0, d.size*0.45, d.size*0.55, 0, 0, Math.PI*2); ctx.fill();
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(-d.size*0.45, -d.size*0.12, d.size*0.12, d.size*0.12, 0, 0, Math.PI*2); ctx.fill();
+  } else if (d.kind === 'gold'){
+    ctx.beginPath();
+    const r = d.size;
+    ctx.fillStyle = '#ffcf67';
+    ctx.ellipse(d.x, d.y, r, r, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath(); ctx.ellipse(d.x - r*0.35, d.y - r*0.35, r*0.32, r*0.45, 0, 0, Math.PI*2); ctx.fill();
+  } else if (d.kind === 'nutrient'){
+    ctx.beginPath();
+    ctx.fillStyle = '#88ff9a';
+    ctx.ellipse(d.x, d.y, d.size, d.size+2, 0, 0, Math.PI*2);
+    ctx.fill();
+  } else if (d.kind === 'fertilizer'){
+    ctx.beginPath();
+    ctx.fillStyle = '#ffb2df';
+    ctx.ellipse(d.x, d.y, d.size, d.size+3, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawEffects(){
+  for(const e of state.effects){
+    ctx.globalAlpha = Math.max(0, e.life / 0.9);
+    ctx.fillStyle = e.color;
+    ctx.beginPath(); ctx.ellipse(e.x, e.y, e.size, e.size, 0, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawHUD(){
+  // top UI handled by DOM for text; draw an icon for stage
+  const x = state.width - 84;
+  const y = 16;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.fillRect(x, y, 72, 34);
+  ctx.fillStyle = '#222';
+  ctx.font = '12px sans-serif';
+  ctx.fillText(STAGE_NAMES[state.growth.stage], x+8, y+20);
+}
+
+/* ---------- Helpers ---------- */
+function roundRect(ctx,x,y,w,h,r,fill,stroke){
+  if (typeof r === 'undefined') r = 5;
+  ctx.beginPath();
+  ctx.moveTo(x+r,y);
+  ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);
+  ctx.arcTo(x,y+h,x,y,r);
+  ctx.arcTo(x,y,x+w,y,r);
+  ctx.closePath();
+  if (fill) ctx.fill();
+  if (stroke) ctx.stroke();
+}
+
+/* ---------- Main Loop ---------- */
+function gameLoop(ts){
+  if (!state.lastTime) state.lastTime = ts;
+  const dt = Math.min(0.05, (ts - state.lastTime)/1000); // clamp delta
+  state.lastTime = ts;
+  if (!state.paused){
+    update(dt);
+  }
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+/* ---------- Render function ---------- */
+function render(){
+  // update measured dims
+  state.width = canvas.width / DPR;
+  state.height = canvas.height / DPR;
+  // clear
+  drawBackground();
+
+  // ground / soil
+  ctx.fillStyle = '#6b4f33';
+  ctx.fillRect(0, state.height - 80, state.width, 80);
+  ctx.fillStyle = '#4e3a29';
+  ctx.fillRect(0, state.height - 40, state.width, 40);
+
+  // pot position and placement
+  state.pot.y = state.height - 120;
+  state.pot.w = Math.max(80, Math.min(160, state.width * 0.18));
+  // if pot.x uninitialized, center
+  if (!state.pot._init){
+    state.pot.x = (state.width - state.pot.w)/2;
+    state.pot._init = true;
+  }
+  // clamp pot
+  state.pot.x = Math.max(8, Math.min(state.width - state.pot.w - 8, state.pot.x));
+
+  // draw drops
+  for(const d of state.drops) drawDrop(d);
+
+  // draw plant on pot
+  drawPlant();
+
+  // draw effects
+  drawEffects();
+
+  // draw HUD overlays
+  drawHUD();
+
+  // DOM UI updates
+  scoreDisplay.textContent = 'Score: ' + state.score;
+  thirstFill.style.width = (state.thirst) + '%';
+
+  // if wilted, overlay
+  if (state.thirst <= 0){
+    ctx.fillStyle = 'rgba(20,20,20,0.35)';
+    ctx.fillRect(0,0,state.width,state.height);
+    ctx.fillStyle = '#fff';
+    ctx.font = '28px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Your plant is wilting...', state.width/2, state.height/2 - 10);
+    ctx.font = '16px sans-serif';
+    ctx.fillText('Drag to catch drops and revive it!', state.width/2, state.height/2 + 22);
+  }
+}
+
+/* ---------- Start the game loop ---------- */
+requestAnimationFrame(gameLoop);
+
+/* ---------- Periodic tasks ---------- */
+setInterval(()=>{
+  // spawn logic and timers handled in updateSpawning; this timer ensures regular checks for offline systems
+  // also give subtle random move for pot when not touched (skipped for simplicity)
+}, 1000);
+
+/* ---------- Simple auto spawn to keep things lively if paused or first seconds ---------- */
+(function starter(){
+  // ensure spawn timer gets set
+  state.spawnTimer = 0.6;
+})();
+
+/* ---------- Utility: tick for spawning and wind handled inside updateSpawning called from update() ---------- */
+
+/* ---------- Restart on loading tap to unlock audio on mobile ---------- */
+function unlockAudio(){
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  window.removeEventListener('touchstart', unlockAudio);
+  window.removeEventListener('click', unlockAudio);
+}
+window.addEventListener('touchstart', unlockAudio, { once:true });
+window.addEventListener('click', unlockAudio, { once:true });
+
+/* ---------- Give initial seed: reduce thirst slowly to create challenge ---------- */
+setInterval(()=>{
+  // small "time by second" changes: slightly accelerate difficulty
+  // nothing heavy here
+}, 1000);
+</script>
+</body>
+</html>
